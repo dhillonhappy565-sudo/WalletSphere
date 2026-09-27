@@ -49,6 +49,7 @@ function DashboardOverview({
   currencySymbol = '₹',
   onNavigateToTransactions,
   onNavigateToBudgets,
+  onOpenBankSyncModal,
   onEditTransaction,
   onDeleteTransaction,
   onTransactionUpdated,
@@ -144,13 +145,23 @@ function DashboardOverview({
           </p>
         </div>
 
-        <button
-          onClick={onNavigateToTransactions}
-          className="inline-flex items-center justify-center gap-2 px-4.5 py-2.5 rounded-xl bg-slate-950 text-white text-xs font-semibold shadow-md hover:bg-emerald-600 transition cursor-pointer"
-        >
-          <span>View All Transactions</span>
-          <ArrowRight size={15} />
-        </button>
+        <div className="flex items-center gap-2.5">
+          <button
+            onClick={onOpenBankSyncModal}
+            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold shadow-md transition cursor-pointer"
+          >
+            <Zap size={15} />
+            <span>Bank Email Sync</span>
+          </button>
+
+          <button
+            onClick={onNavigateToTransactions}
+            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-slate-950 text-white text-xs font-semibold shadow-md hover:bg-slate-800 transition cursor-pointer"
+          >
+            <span>View All</span>
+            <ArrowRight size={15} />
+          </button>
+        </div>
       </div>
 
       {/* 4 FINANCIAL SUMMARY CARDS */}
@@ -160,14 +171,16 @@ function DashboardOverview({
         <div className="bg-white p-4 sm:p-6 rounded-3xl border border-slate-200/80 shadow-xs hover:shadow-md transition duration-300">
           <div className="flex items-center justify-between mb-3">
             <span className="text-[11px] sm:text-xs font-semibold text-slate-500">Total Net Worth</span>
-            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-slate-100 text-slate-700 flex items-center justify-center">
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center">
               <Wallet size={17} />
             </div>
           </div>
           <p className="text-xl sm:text-3xl font-black text-slate-950 tracking-tight">
-            {currencySymbol}{summary.netBalance.toLocaleString()}
+            {currencySymbol}{((user?.netWorth || 0) > 0 ? user.netWorth : summary.netBalance).toLocaleString()}
           </p>
-          <span className="text-[10px] sm:text-[11px] text-slate-400 mt-1.5 block">Live net balance</span>
+          <span className="text-[10px] sm:text-[11px] text-slate-400 mt-1.5 block font-medium">
+            {(user?.netWorth || 0) > 0 ? 'Configured Profile Net Worth' : 'Live Net Balance'}
+          </span>
         </div>
 
         {/* This Month Income */}

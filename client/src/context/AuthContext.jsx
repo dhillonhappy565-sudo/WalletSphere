@@ -56,6 +56,7 @@ export function AuthProvider({ children }) {
     setUser(null);
     localStorage.removeItem('walletsphere_token');
     localStorage.removeItem('walletsphere_user');
+    localStorage.removeItem('walletsphere_google_access_token');
   };
 
   const updateUserProfile = async (updatedData) => {

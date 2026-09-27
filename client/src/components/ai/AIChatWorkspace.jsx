@@ -14,6 +14,8 @@ import {
   Sliders,
   Scale,
   Receipt,
+  CheckCircle2,
+  PlusCircle,
 } from 'lucide-react';
 
 function AIChatWorkspace({ user, currencySymbol = '₹' }) {
@@ -22,6 +24,8 @@ function AIChatWorkspace({ user, currencySymbol = '₹' }) {
   const [loading, setLoading] = useState(false);
   const [loadingText, setLoadingText] = useState('WalletSphere AI is responding...');
   const [confidence, setConfidence] = useState('HIGH');
+  const [executingActionId, setExecutingActionId] = useState(null);
+  const [executedActionIds, setExecutedActionIds] = useState(new Set());
   const messagesEndRef = useRef(null);
 
   const userName = user?.fullName?.split(' ')[0] || 'Friend';
@@ -35,25 +39,25 @@ function AIChatWorkspace({ user, currencySymbol = '₹' }) {
   }, [messages, loading]);
 
   const suggestedQuestions = [
-    { title: 'my food expenses', icon: ShoppingBag },
-    { title: 'zomato spending', icon: Receipt },
+    { title: 'Create a ₹6,000 food budget for this month', icon: PlusCircle },
+    { title: 'Log ₹450 spent on Zomato for Lunch', icon: ShoppingBag },
+    { title: 'my food expenses', icon: Receipt },
     { title: 'Can I buy a car of 5 lakh if my salary is 80k per month?', icon: Car },
     { title: 'If I reduce my current expenses to 20k', icon: Sliders },
-    { title: 'What is compound interest?', icon: BookOpen },
   ];
 
   const handleSendMessage = async (textToSend) => {
     const queryText = (textToSend || inputMessage).trim();
     if (!queryText || loading) return;
 
-    // Fast UI Update: Immediate user message display & input clear
     const userMsg = { id: Date.now(), sender: 'user', text: queryText };
     setMessages((prev) => [...prev, userMsg]);
     setInputMessage('');
     setLoading(true);
 
-    // Contextual Loading State
-    if (/food|spending|zomato|expenses|shopping|income/i.test(queryText)) {
+    if (/create|add|log|set|budget|transaction|bill/i.test(queryText)) {
+      setLoadingText('Preparing WalletSphere 2-Way action...');
+    } else if (/food|spending|zomato|expenses|shopping|income/i.test(queryText)) {
       setLoadingText('Checking your WalletSphere transactions...');
     } else if (/car|bike|house|emi|afford|buy|salary|expenses/i.test(queryText)) {
       setLoadingText('Calculating scenario & cash flow...');
@@ -102,6 +106,33 @@ function AIChatWorkspace({ user, currencySymbol = '₹' }) {
     }
   };
 
+  const handleConfirmAction = async (msgId, actionData) => {
+    setExecutingActionId(msgId);
+    try {
+      const res = await API.post('/ai/execute-action', {
+        actionType: actionData.actionType,
+        payload: actionData.payload,
+      });
+
+      setExecutedActionIds((prev) => new Set(prev).add(msgId));
+
+      const confirmMsg = {
+        id: Date.now() + 2,
+        sender: 'ai',
+        text: res.data.message || 'Action executed successfully!',
+        ui: [],
+        dataSources: ['WalletSphere live database write'],
+        assumptions: [],
+      };
+      setMessages((prev) => [...prev, confirmMsg]);
+      setExecutingActionId(null);
+    } catch (error) {
+      console.error('Error executing action:', error);
+      alert(error.response?.data?.message || 'Failed to execute action.');
+      setExecutingActionId(null);
+    }
+  };
+
   return (
     <div className="flex flex-col h-[calc(100vh-140px)] min-h-[550px] max-w-5xl mx-auto space-y-4 animate-fadeIn">
       
@@ -115,11 +146,11 @@ function AIChatWorkspace({ user, currencySymbol = '₹' }) {
             <div className="flex items-center gap-2">
               <h2 className="text-lg font-black text-slate-950">✨ WalletSphere AI</h2>
               <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-extrabold text-[10px]">
-                HIGH-SPEED AI PIPELINE
+                2-WAY ACTION EXECUTION ENGINE
               </span>
             </div>
             <p className="text-xs text-slate-500 font-medium">
-              Sub-second conversational assistant & instant financial scenario engine
+              Sub-second conversational assistant & interactive action executor
             </p>
           </div>
         </div>
@@ -149,14 +180,14 @@ function AIChatWorkspace({ user, currencySymbol = '₹' }) {
                 Good day, {userName} 👋
               </h3>
               <p className="text-xs sm:text-sm text-slate-500 font-medium">
-                Ask me anything — from "my food expenses" (<span className="text-emerald-700 font-bold">&lt; 50ms fast path</span>) to What-If car purchase scenarios.
+                Ask me to analyze finances or take actions — e.g. "Create a ₹6,000 food budget" or "Log ₹450 spent on Zomato".
               </p>
             </div>
 
             {/* Suggested Quick Questions Grid */}
             <div className="w-full max-w-xl space-y-2 text-left pt-2">
               <span className="text-[11px] font-extrabold uppercase tracking-widest text-slate-400 block px-1">
-                SUGGESTED SCENARIOS & QUESTIONS
+                SUGGESTED ACTIONS & QUESTIONS
               </span>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 {suggestedQuestions.map((q) => {
@@ -209,6 +240,46 @@ function AIChatWorkspace({ user, currencySymbol = '₹' }) {
 
                   {/* DYNAMIC UI BLOCKS */}
                   {msg.ui && msg.ui.map((block, bIdx) => {
+                    if (block.type === 'action_confirm' && block.data) {
+                      const act = block.data;
+                      const isExecuted = executedActionIds.has(msg.id);
+                      const isExecuting = executingActionId === msg.id;
+
+                      return (
+                        <div key={bIdx} className="p-4.5 rounded-3xl bg-slate-900 text-white space-y-3 text-xs shadow-lg animate-fadeIn border border-slate-800">
+                          <div className="flex items-center justify-between">
+                            <span className="font-extrabold text-emerald-400 flex items-center gap-1.5 text-xs">
+                              <PlusCircle size={16} /> Action Confirmation Required
+                            </span>
+                            {isExecuted && (
+                              <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 text-[10px] font-bold border border-emerald-500/30 flex items-center gap-1">
+                                <CheckCircle2 size={12} /> Executed
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="p-3 rounded-2xl bg-slate-850/80 border border-slate-800 space-y-1">
+                            <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider block">{act.title}</span>
+                            <p className="text-xs font-semibold text-slate-200 leading-snug">
+                              {act.actionType === 'CREATE_BUDGET' && `Set ${act.payload.category} budget of ${currencySymbol}${act.payload.amount.toLocaleString()} for ${act.payload.month}`}
+                              {act.actionType === 'ADD_TRANSACTION' && `Record ${act.payload.type} of ${currencySymbol}${act.payload.amount.toLocaleString()} for "${act.payload.description}" under ${act.payload.category}`}
+                              {act.actionType === 'ADD_RECURRING_BILL' && `Set recurring bill reminder "${act.payload.title}" (${currencySymbol}${act.payload.amount.toLocaleString()}/mo)`}
+                            </p>
+                          </div>
+
+                          {!isExecuted && (
+                            <button
+                              onClick={() => handleConfirmAction(msg.id, act)}
+                              disabled={isExecuting}
+                              className="w-full py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2 shadow-sm"
+                            >
+                              {isExecuting ? <RefreshCw size={15} className="animate-spin" /> : 'Confirm & Execute Action →'}
+                            </button>
+                          )}
+                        </div>
+                      );
+                    }
+
                     if (block.type === 'spending_summary' && block.data) {
                       const s = block.data;
                       return (
@@ -375,7 +446,7 @@ function AIChatWorkspace({ user, currencySymbol = '₹' }) {
 
       </div>
 
-      {/* INPUT FORM BAR WITH DOUBLE SUBMISSION PREVENTION */}
+      {/* INPUT FORM BAR */}
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -388,7 +459,7 @@ function AIChatWorkspace({ user, currencySymbol = '₹' }) {
           value={inputMessage}
           disabled={loading}
           onChange={(e) => setInputMessage(e.target.value)}
-          placeholder="Ask WalletSphere... (e.g. 'my food expenses' or 'Can I buy a 5 lakh car?')"
+          placeholder="Ask WalletSphere... (e.g. 'Create a ₹6,000 food budget' or 'Log ₹450 spent on Zomato')"
           className="flex-1 px-4 py-2.5 text-xs font-semibold text-slate-900 bg-slate-50 border border-slate-200/80 rounded-xl sm:rounded-2xl focus:bg-white focus:border-emerald-500 focus:outline-none transition disabled:opacity-60"
         />
 

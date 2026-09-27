@@ -1,4 +1,7 @@
 const OpenAI = require('openai');
+const Transaction = require('../models/Transaction');
+const Budget = require('../models/Budget');
+const RecurringBill = require('../models/RecurringBill');
 const { getFinancialMetrics, simulatePurchaseScenario } = require('../utils/financialEngine');
 const {
   getUserScenarioState,
@@ -12,6 +15,7 @@ const {
   getSubscriptionsList,
   getEMIsList,
   getSpendingComparison,
+  invalidateUserCache,
 } = require('../utils/aiToolRegistry');
 
 const getOpenAIClient = () => {
@@ -23,11 +27,11 @@ const getOpenAIClient = () => {
   return new OpenAI({
     apiKey,
     baseURL: 'https://integrate.api.nvidia.com/v1',
-    timeout: 4500, // 4.5s strict timeout for fast execution
+    timeout: 4500,
   });
 };
 
-// @desc    High-Performance AI Orchestrator with Latency Profiler & Zero-LLM Fast Path
+// @desc    Process AI Chat request
 // @route   POST /api/ai/chat
 // @access  Private
 const chatWithAI = async (req, res) => {
@@ -48,7 +52,6 @@ const chatWithAI = async (req, res) => {
       });
     }
 
-    // STEP 1: FAST ROUTER (< 2ms)
     const routerStart = Date.now();
     const currentScenarioState = getUserScenarioState(userId) || {};
     const intentResult = classifyIntent(message, currentScenarioState);
@@ -61,7 +64,6 @@ const chatWithAI = async (req, res) => {
     let dataSources = [];
     let assumptions = [];
 
-    // Save active context to session state
     updateUserScenarioState(userId, {
       lastIntent: intent,
       lastCategory: intentResult.category || currentScenarioState.lastCategory,
@@ -69,9 +71,104 @@ const chatWithAI = async (req, res) => {
       lastPeriod: intentResult.period || currentScenarioState.lastPeriod,
     });
 
-    // =========================================================================
-    // FAST PATH A: PERSONAL DATA QUERIES (0 LLM CALLS -> < 30ms RESPONSE TIME)
-    // =========================================================================
+    // ==========================================
+    // ROUTE 1: WALLETWISE 2-WAY ACTION PREPARATION
+    // ==========================================
+    if (intent === 'WALLETWISE_ACTION') {
+      const text = message.toLowerCase();
+      let actionType = 'CREATE_BUDGET';
+      let title = 'Action Confirmation';
+      let payload = {};
+
+      const numMatch = message.match(/₹?\s*(\d+(?:\.\d+)?)\s*(lakh|lac|k)?/i);
+      let amount = 5000;
+      if (numMatch) {
+        const val = parseFloat(numMatch[1]);
+        const unit = (numMatch[2] || '').toLowerCase();
+        if (unit.includes('k')) amount = val * 1000;
+        else if (unit.includes('lakh') || unit.includes('lac')) amount = val * 100000;
+        else if (val > 0) amount = val;
+      }
+
+      if (text.includes('log') || text.includes('add transaction') || text.includes('spent') || text.includes('expense')) {
+        actionType = 'ADD_TRANSACTION';
+        title = 'Record New Transaction';
+        const descMatch = message.match(/(?:for|on)\s+([a-zA-Z0-9\s]+)/i);
+        const description = descMatch ? descMatch[1].trim() : 'AI Logged Expense';
+        
+        let category = 'Others';
+        if (text.includes('zomato') || text.includes('swiggy') || text.includes('food')) category = 'Food';
+        else if (text.includes('uber') || text.includes('cab') || text.includes('travel')) category = 'Travel';
+        else if (text.includes('amazon') || text.includes('shopping')) category = 'Shopping';
+        else if (text.includes('recharge') || text.includes('bill')) category = 'Bills';
+
+        payload = {
+          description,
+          amount,
+          type: 'expense',
+          category,
+          date: new Date().toISOString(),
+        };
+
+        aiResponseText = `I am ready to record an expense of **₹${amount.toLocaleString()}** for **"${description}"** under **${category}**. Please confirm below.`;
+      } else if (text.includes('recurring') || text.includes('bill') || text.includes('netflix') || text.includes('subscription')) {
+        actionType = 'ADD_RECURRING_BILL';
+        title = 'Add Recurring Bill Reminder';
+        const titleMatch = message.match(/(?:bill|recurring|subscription)\s+([a-zA-Z0-9\s]+)/i);
+        const billTitle = titleMatch ? titleMatch[1].trim() : 'Recurring Bill';
+
+        payload = {
+          title: billTitle,
+          amount,
+          dueDateDay: 5,
+          category: 'Bills',
+        };
+
+        aiResponseText = `I am ready to set a recurring bill reminder for **"${billTitle}"** (₹${amount.toLocaleString()}/month). Please confirm below.`;
+      } else {
+        // Default: CREATE_BUDGET
+        actionType = 'CREATE_BUDGET';
+        title = 'Set Category Budget';
+        let category = 'Food';
+        if (text.includes('shopping')) category = 'Shopping';
+        else if (text.includes('travel')) category = 'Travel';
+        else if (text.includes('entertainment')) category = 'Entertainment';
+        else if (text.includes('bills')) category = 'Bills';
+
+        const currentMonth = new Date().toISOString().slice(0, 7);
+        payload = {
+          category,
+          amount,
+          month: currentMonth,
+        };
+
+        aiResponseText = `I am ready to set a **₹${amount.toLocaleString()}** budget for **${category}** for ${currentMonth}. Please confirm below.`;
+      }
+
+      uiBlocks.push({
+        type: 'action_confirm',
+        data: {
+          actionType,
+          title,
+          payload,
+        },
+      });
+
+      return res.status(200).json({
+        status: 'success',
+        data: {
+          message: aiResponseText,
+          intent,
+          scenario: null,
+          ui: uiBlocks,
+          dataSources: ['User interactive request'],
+          assumptions: [],
+          confidence: 'HIGH',
+        },
+      });
+    }
+
+    // ROUTE 2: PERSONAL DATA QUERIES
     if (intent === 'PERSONAL_DATA_QUERY') {
       const dbStart = Date.now();
       const category = intentResult.category || 'Food';
@@ -154,9 +251,7 @@ const chatWithAI = async (req, res) => {
       });
     }
 
-    // =========================================================================
-    // FAST PATH B: DETERMINISTIC SCENARIO FOLLOW-UP (0 LLM CALLS -> < 15ms)
-    // =========================================================================
+    // ROUTE 3: DETERMINISTIC SCENARIO FOLLOW-UP
     const isScenarioFollowUp = intent === 'WHAT_IF_SCENARIO' &&
       (currentScenarioState.purchasePrice || currentScenarioState.userSpecifiedIncome) &&
       /^(emi for|what about|make it|2 years|3 years|1 year|5 years|down payment|interest)/i.test(message);
@@ -204,9 +299,7 @@ const chatWithAI = async (req, res) => {
       });
     }
 
-    // =========================================================================
-    // ROUTE C: GENERAL KNOWLEDGE (DIRECT LLM -> ~1.2s RESPONSE TIME)
-    // =========================================================================
+    // ROUTE 4: GENERAL KNOWLEDGE
     if (intent === 'GENERAL' || intent === 'FINANCIAL_EDUCATION') {
       const llmStart = Date.now();
       const systemPrompt = `You are WalletSphere AI, an intelligent, helpful conversational AI assistant.
@@ -255,9 +348,7 @@ Answer general questions naturally, directly, and accurately.
       });
     }
 
-    // =========================================================================
-    // ROUTE D: COMPLEX SCENARIO ANALYSIS (PARALLEL DB + COMPACT LLM EXPLANATION)
-    // =========================================================================
+    // ROUTE 5: COMPLEX SCENARIO ANALYSIS
     if (intent === 'WHAT_IF_SCENARIO') {
       const parStart = Date.now();
       const promptUpdates = extractScenarioParamsFromPrompt(message, currentScenarioState);
@@ -336,7 +427,6 @@ State Assessment, Your Numbers, Why (2 sentences), and Watch Out For concisely u
       });
     }
 
-    // Fallback
     return res.status(200).json({
       status: 'success',
       data: {
@@ -358,6 +448,83 @@ State Assessment, Your Numbers, Why (2 sentences), and Watch Out For concisely u
   }
 };
 
+// @desc    Execute AI confirmed action (2-Way Execution)
+// @route   POST /api/ai/execute-action
+// @access  Private
+const executeAIAction = async (req, res) => {
+  try {
+    const { actionType, payload } = req.body;
+    const userId = req.user._id;
+
+    if (!actionType || !payload) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Invalid action payload.',
+      });
+    }
+
+    let resultMessage = '';
+
+    if (actionType === 'CREATE_BUDGET') {
+      const { category, amount, month } = payload;
+      const budgetMonth = month || new Date().toISOString().slice(0, 7);
+
+      const budget = await Budget.findOneAndUpdate(
+        { user: userId, category, month: budgetMonth },
+        { amount: parseFloat(amount) },
+        { new: true, upsert: true }
+      );
+
+      invalidateUserCache(userId);
+      resultMessage = `Successfully created ${category} budget of ₹${budget.amount.toLocaleString()} for ${budgetMonth}!`;
+    } else if (actionType === 'ADD_TRANSACTION') {
+      const { description, amount, type, category, date } = payload;
+
+      const transaction = await Transaction.create({
+        user: userId,
+        description: description || 'AI Logged Transaction',
+        amount: parseFloat(amount),
+        type: type || 'expense',
+        category: category || 'Others',
+        date: date ? new Date(date) : new Date(),
+      });
+
+      invalidateUserCache(userId);
+      resultMessage = `Successfully recorded ${transaction.type} of ₹${transaction.amount.toLocaleString()} for "${transaction.description}" under ${transaction.category}!`;
+    } else if (actionType === 'ADD_RECURRING_BILL') {
+      const { title, amount, dueDateDay, category } = payload;
+
+      const bill = await RecurringBill.create({
+        user: userId,
+        title: title || 'Recurring Bill',
+        amount: parseFloat(amount),
+        dueDateDay: parseInt(dueDateDay, 10) || 1,
+        category: category || 'Bills',
+      });
+
+      invalidateUserCache(userId);
+      resultMessage = `Successfully set recurring bill reminder for "${bill.title}" (₹${bill.amount.toLocaleString()}/mo due on day ${bill.dueDateDay})!`;
+    } else {
+      return res.status(400).json({
+        status: 'fail',
+        message: `Unsupported action type: ${actionType}`,
+      });
+    }
+
+    return res.status(200).json({
+      status: 'success',
+      message: resultMessage,
+    });
+  } catch (error) {
+    console.error('Error executing AI action:', error);
+    return res.status(500).json({
+      status: 'error',
+      message: error.message || 'Failed to execute action',
+    });
+  }
+};
+
 module.exports = {
   chatWithAI,
+  executeAIAction,
 };

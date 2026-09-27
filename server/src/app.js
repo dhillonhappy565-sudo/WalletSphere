@@ -6,6 +6,7 @@ const transactionRoutes = require('./routes/transactionRoutes');
 const budgetRoutes = require('./routes/budgetRoutes');
 const recurringBillRoutes = require('./routes/recurringBillRoutes');
 const aiRoutes = require('./routes/aiRoutes');
+const bankSyncRoutes = require('./routes/bankSyncRoutes');
 
 const app = express();
 
@@ -23,6 +24,7 @@ app.use('/api/transactions', transactionRoutes);
 app.use('/api/budgets', budgetRoutes);
 app.use('/api/bills', recurringBillRoutes);
 app.use('/api/ai', aiRoutes);
+app.use('/api/bank-sync', bankSyncRoutes);
 
 // Base API Health Check
 app.get('/api/health', (req, res) => {
