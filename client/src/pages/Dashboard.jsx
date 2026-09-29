@@ -176,9 +176,9 @@ function Dashboard() {
             <button
               onClick={() => setIsBankSyncModalOpen(true)}
               title="Auto Bank Email Sync (Gmail/Parse)"
-              className="px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 hover:bg-emerald-500/20 text-emerald-700 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
+              className="px-3.5 py-2 rounded-xl bg-slate-950 hover:bg-emerald-600 text-white text-xs font-semibold shadow-sm transition flex items-center gap-1.5 cursor-pointer"
             >
-              <Zap size={14} className="text-emerald-600 fill-emerald-500/30" />
+              <Zap size={14} className="text-emerald-400" />
               <span className="hidden sm:inline">Bank Email Sync</span>
             </button>
 

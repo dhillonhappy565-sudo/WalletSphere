@@ -148,15 +148,15 @@ function DashboardOverview({
         <div className="flex items-center gap-2.5">
           <button
             onClick={onOpenBankSyncModal}
-            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold shadow-md transition cursor-pointer"
+            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-slate-950 text-white text-xs font-semibold shadow-md hover:bg-emerald-600 transition cursor-pointer"
           >
-            <Zap size={15} />
+            <Zap size={15} className="text-emerald-400" />
             <span>Bank Email Sync</span>
           </button>
 
           <button
             onClick={onNavigateToTransactions}
-            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-slate-950 text-white text-xs font-semibold shadow-md hover:bg-slate-800 transition cursor-pointer"
+            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border border-slate-200/90 bg-white text-slate-800 text-xs font-semibold shadow-2xs hover:bg-slate-50 transition cursor-pointer"
           >
             <span>View All</span>
             <ArrowRight size={15} />

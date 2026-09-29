@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import { useGoogleLogin } from '@react-oauth/google';
 import API from '../../services/api';
-import { X, Mail, CheckCircle2, AlertCircle, RefreshCw, Zap, FileText, ArrowRight, ShieldCheck } from 'lucide-react';
+import { X, Mail, CheckCircle2, AlertCircle, RefreshCw, Zap, FileText, ArrowRight, ShieldCheck, Calendar } from 'lucide-react';
 
 function BankEmailSyncModal({ isOpen, onClose, onSyncComplete }) {
   const [activeTab, setActiveTab] = useState('gmail'); // 'gmail' | 'paste'
+  const [scanDays, setScanDays] = useState(90); // Default: 90 days timeline range
   const [loading, setLoading] = useState(false);
   const [syncResult, setSyncResult] = useState(null);
   const [error, setError] = useState('');
@@ -21,6 +22,7 @@ function BankEmailSyncModal({ isOpen, onClose, onSyncComplete }) {
     try {
       const res = await API.post('/bank-sync/sync-gmail', {
         googleAccessToken: accessToken,
+        days: scanDays,
       });
 
       // Cache token for future silent syncs
@@ -150,8 +152,28 @@ function BankEmailSyncModal({ isOpen, onClose, onSyncComplete }) {
 
           {/* TAB 1: GMAIL SYNC */}
           {activeTab === 'gmail' && (
-            <div className="space-y-5">
-              <div className="bg-slate-800/50 rounded-2xl p-5 border border-slate-800 space-y-3">
+            <div className="space-y-4">
+              
+              {/* Scan Timeline Range Dropdown */}
+              <div className="flex items-center justify-between bg-slate-800/80 p-3.5 rounded-2xl border border-slate-700">
+                <div className="flex items-center gap-2 text-xs font-semibold text-slate-300">
+                  <Calendar size={16} className="text-emerald-400" />
+                  <span>Scan Email Timeline:</span>
+                </div>
+                <select
+                  value={scanDays}
+                  onChange={(e) => setScanDays(parseInt(e.target.value, 10))}
+                  disabled={loading}
+                  className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-emerald-400 font-bold focus:outline-none cursor-pointer"
+                >
+                  <option value={30}>Last 30 Days</option>
+                  <option value={90}>Last 90 Days (Recommended)</option>
+                  <option value={180}>Last 6 Months (180 Days)</option>
+                  <option value={365}>Last 1 Year (365 Days)</option>
+                </select>
+              </div>
+
+              <div className="bg-slate-800/50 rounded-2xl p-4 border border-slate-800 space-y-2">
                 <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-emerald-400">
                   <ShieldCheck size={16} />
                   <span>Secure Read-Only Access</span>
@@ -172,17 +194,17 @@ function BankEmailSyncModal({ isOpen, onClose, onSyncComplete }) {
                 <button
                   onClick={handleScanGmailClick}
                   disabled={loading}
-                  className="w-full py-4 px-5 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-sm font-bold shadow-lg shadow-emerald-900/30 transition flex items-center justify-center gap-3 cursor-pointer disabled:opacity-60"
+                  className="w-full py-3.5 px-5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold shadow-md shadow-emerald-950/40 transition flex items-center justify-center gap-3 cursor-pointer disabled:opacity-60"
                 >
                   {loading ? (
                     <>
                       <RefreshCw size={18} className="animate-spin" />
-                      <span>Scanning Gmail for Bank Emails...</span>
+                      <span>Scanning Gmail Inbox ({scanDays} Days)...</span>
                     </>
                   ) : (
                     <>
                       <Zap size={18} />
-                      <span>Scan Gmail for Bank Transaction Alerts</span>
+                      <span>Scan Gmail Inbox ({scanDays} Days)</span>
                     </>
                   )}
                 </button>

@@ -2,13 +2,42 @@ const Transaction = require('../models/Transaction');
 const { parseBankEmail, parseBankEmailWithAI } = require('../utils/bankEmailParser');
 
 /**
+ * Recursive helper to extract and decode plain text/HTML body from nested Gmail MIME parts.
+ */
+function extractBodyFromGmailPayload(payload) {
+  let bodyText = '';
+
+  if (!payload) return bodyText;
+
+  // Direct body data
+  if (payload.body && payload.body.data) {
+    const decoded = Buffer.from(payload.body.data, 'base64').toString('utf-8');
+    if (payload.mimeType === 'text/html') {
+      // Strip HTML tags & decode HTML entities to plain text
+      bodyText += ' ' + decoded.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ');
+    } else {
+      bodyText += ' ' + decoded;
+    }
+  }
+
+  // Recursive parts traversal
+  if (payload.parts && Array.isArray(payload.parts)) {
+    for (const part of payload.parts) {
+      bodyText += ' ' + extractBodyFromGmailPayload(part);
+    }
+  }
+
+  return bodyText;
+}
+
+/**
  * POST /api/bank-sync/sync-gmail
- * Fetches recent bank alert emails using Google Access Token, parses them,
- * and saves new non-duplicate transactions for the logged-in user.
+ * Fetches bank alert emails from Gmail for a given timeline range (default: last 90 days),
+ * parses them, and saves non-duplicate transactions for the logged-in user.
  */
 exports.syncGmailBankAlerts = async (req, res) => {
   try {
-    const { googleAccessToken } = req.body;
+    const { googleAccessToken, days = 90 } = req.body;
     const userId = req.user._id;
 
     if (!googleAccessToken) {
@@ -18,13 +47,20 @@ exports.syncGmailBankAlerts = async (req, res) => {
       });
     }
 
-    // 1. Search Gmail for bank alert emails across domain variations
-    const query = encodeURIComponent(
-      'from:(hdfcbank.bank.in OR hdfcbank.net OR hdfcbank.com OR icicibank.com OR sbi.co.in OR axisbank.com OR paytm.com OR phonepe.com OR razorpay.com OR amazonpay.in) OR subject:(debited OR credited OR "transaction alert" OR "InstaAlerts" OR "UPI transaction")'
-    );
+    // Calculate timeline date cutoff for Gmail query (e.g. newer_than:90d)
+    const scanDays = Math.min(Math.max(parseInt(days, 10) || 90, 7), 365);
+    const newerThanParam = `newer_than:${scanDays}d`;
 
+    // Extremely inclusive search query covering all Indian banks, card issuers & payment apps
+    const bankDomains = 'hdfcbank OR icicibank OR sbi OR axisbank OR paytm OR phonepe OR razorpay OR amazonpay OR kotak OR pnb OR bank OR alert';
+    const transactionKeywords = 'debited OR credited OR "transaction alert" OR "InstaAlerts" OR "UPI" OR "paid to" OR "account ending" OR "credited to" OR "spent"';
+    
+    const queryStr = `(${newerThanParam}) AND (from:(${bankDomains}) OR subject:(${transactionKeywords}) OR "debited from" OR "credited to")`;
+    const encodedQuery = encodeURIComponent(queryStr);
+
+    // Fetch up to 100 matching message IDs from Gmail
     const listRes = await fetch(
-      `https://www.googleapis.com/gmail/v1/users/me/messages?q=${query}&maxResults=15`,
+      `https://www.googleapis.com/gmail/v1/users/me/messages?q=${encodedQuery}&maxResults=100`,
       {
         headers: { Authorization: `Bearer ${googleAccessToken}` },
       }
@@ -44,8 +80,8 @@ exports.syncGmailBankAlerts = async (req, res) => {
     if (messages.length === 0) {
       return res.status(200).json({
         status: 'success',
-        message: 'No bank alert emails found in your Gmail inbox.',
-        data: { syncedCount: 0, skippedCount: 0, transactionsAdded: [] },
+        message: `No bank alert emails found in your Gmail inbox for the last ${scanDays} days.`,
+        data: { syncedCount: 0, skippedCount: 0, transactionsAdded: [], scanDays },
       });
     }
 
@@ -53,7 +89,7 @@ exports.syncGmailBankAlerts = async (req, res) => {
     let skippedCount = 0;
     const transactionsAdded = [];
 
-    // 2. Process each email message
+    // Process matching email messages
     for (const msgRef of messages) {
       const msgRes = await fetch(
         `https://www.googleapis.com/gmail/v1/users/me/messages/${msgRef.id}?format=full`,
@@ -67,26 +103,21 @@ exports.syncGmailBankAlerts = async (req, res) => {
       const subjectHeader = headers.find((h) => h.name.toLowerCase() === 'subject');
       const subject = subjectHeader ? subjectHeader.value : '';
 
-      // Extract body
-      let bodyText = msgData.snippet || '';
-      if (msgData.payload?.parts) {
-        for (const part of msgData.payload.parts) {
-          if (part.mimeType === 'text/plain' && part.body?.data) {
-            bodyText += ' ' + Buffer.from(part.body.data, 'base64').toString('utf-8');
-          }
-        }
-      }
+      // Extract complete body text from all MIME parts
+      const snippet = msgData.snippet || '';
+      const fullExtractedBody = extractBodyFromGmailPayload(msgData.payload);
+      const combinedBody = `${snippet} ${fullExtractedBody}`.replace(/\s+/g, ' ');
 
-      const internalDate = msgData.internalDate ? new Date(parseInt(msgData.internalDate)) : new Date();
+      const internalDate = msgData.internalDate ? new Date(parseInt(msgData.internalDate, 10)) : new Date();
 
-      // 3. Parse email using hybrid Regex + AI parser
-      const parsed = await parseBankEmailWithAI(subject, bodyText, internalDate);
+      // Parse email using hybrid Regex + AI fallback parser
+      const parsed = await parseBankEmailWithAI(subject, combinedBody, internalDate);
 
-      if (!parsed.isBankAlert || !parsed.amount) {
+      if (!parsed.isBankAlert || !parsed.amount || parsed.amount <= 0) {
         continue;
       }
 
-      // 4. Check for existing duplicate transaction to avoid double counting
+      // Check for existing duplicate transaction (matching amount, type, date within 1-day window)
       const dateStart = new Date(parsed.date);
       dateStart.setHours(0, 0, 0, 0);
       const dateEnd = new Date(parsed.date);
@@ -104,7 +135,7 @@ exports.syncGmailBankAlerts = async (req, res) => {
         continue;
       }
 
-      // 5. Create new transaction in database
+      // Create new transaction in database
       const newTx = await Transaction.create({
         user: userId,
         amount: parsed.amount,
@@ -122,11 +153,12 @@ exports.syncGmailBankAlerts = async (req, res) => {
 
     res.status(200).json({
       status: 'success',
-      message: `Scanned Gmail inbox. ${syncedCount} new bank transactions imported (${skippedCount} duplicates skipped).`,
+      message: `Scanned Gmail inbox for the last ${scanDays} days. ${syncedCount} new transactions imported (${skippedCount} duplicates skipped).`,
       data: {
         syncedCount,
         skippedCount,
         transactionsAdded,
+        scanDays,
       },
     });
   } catch (error) {
@@ -156,7 +188,7 @@ exports.parseRawBankText = async (req, res) => {
 
     const parsed = await parseBankEmailWithAI('', rawText, new Date());
 
-    if (!parsed.isBankAlert) {
+    if (!parsed.isBankAlert || !parsed.amount) {
       return res.status(400).json({
         status: 'fail',
         message: 'Could not detect a valid bank transaction in the provided text. Ensure text includes amount and debit/credit status.',
